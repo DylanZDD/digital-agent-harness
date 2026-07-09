@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────────────
+# Agent Harness 配置
+# 优先级: CLI 参数 > 环境变量 > 本文件 > 代码默认值
+# ─────────────────────────────────────────────────────────────
+
+llm:
+  provider: zhipu          # openai | ollama | vllm
+  model: glm-5.2
+  base_url: https://open.bigmodel.cn/api/coding/paas/v4   # 留空则用各 provider 默认
+  api_key: "507fae3374e6438c952c6dae3e26ebc6.zeu9soAQaiNW2DDO"                          # 留空则读 OPENAI_API_KEY 环境变量
+  temperature: 0.2
+  max_tokens: 2048
+
+agent:
+  max_iterations: 25        # 单轮对话最大工具调用迭代数,防止死循环
+  system_prompt: null       # 覆盖默认人设提示词,null 用内置编程助手人设
+
+tools:
+  workdir: .                # 文件系统工具的根目录(沙箱边界)
+  enable_filesystem: true
+  enable_shell: true
+  shell_timeout: 120        # shell 工具单次执行超时(秒)
+  shell_allowlist: []       # 为空则允许任意命令;非空则只允许列表前缀,如 ["git", "ls", "python"]
+
+skills:
+  dir: skills               # skills 目录,存放 SKILL.md
+
+mcp:
+  servers: {}               # MCP 服务器定义,见下方示例
+  # servers:
+  #   filesystem:
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+  #   sqlite:
+  #     command: uvx
+  #     args: ["mcp-server-sqlite", "--db-path", "/tmp/demo.db"]

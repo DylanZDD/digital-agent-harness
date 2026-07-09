@@ -1,0 +1,14 @@
+# LLM 客户端:三个 provider 都走 OpenAI 兼容接口
+openai>=1.30.0
+
+# MCP (Model Context Protocol) 官方异步 SDK
+mcp>=1.0.0
+
+# 配置文件解析
+pyyaml>=6.0
+
+# 从 .env 加载环境变量(OPENAI_API_KEY 等)
+python-dotenv>=1.0.0
+
+# 终端美化输出
+rich>=13.0.0
