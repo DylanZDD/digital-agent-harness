@@ -24,7 +24,7 @@ from .state import AgentState, to_openai_messages
 logger = logging.getLogger(__name__)
 
 # 事件回调: (event_type: str, data: dict) -> None
-#   event_type ∈ {"assistant", "tool_call", "tool_result", "final", "limit"}
+#   event_type ∈ {"assistant", "tool_call", "tool_result", "limit"}
 EventHandler = Callable[[str, dict[str, Any]], None]
 
 
@@ -61,7 +61,6 @@ async def agent_turn(
     final_text = ""
 
     for i in range(1, max_iterations + 1):
-        state.iteration = i
         messages = to_openai_messages(state.messages, system_prompt)
 
         response = await llm.chat(messages, tools=schemas or None)
@@ -91,7 +90,6 @@ async def agent_turn(
         emit("limit", {"max_iterations": max_iterations})
         final_text = final_text or f"(已达到最大工具调用轮数 {max_iterations},自动停止。)"
 
-    emit("final", {"content": final_text})
     return final_text
 
 

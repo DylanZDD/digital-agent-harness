@@ -58,7 +58,6 @@ class AgentState:
     """单次会话的运行时状态。系统提示词不存这里,发送时由外部拼入。"""
 
     messages: list[Message] = field(default_factory=list)
-    iteration: int = 0
 
     # ── 追加消息的便捷方法 ─────────────────────────────────────
     def add_user(self, text: str) -> Message:
@@ -70,15 +69,6 @@ class AgentState:
         m = Message(role="assistant", content=content, tool_calls=tool_calls)
         self.messages.append(m)
         return m
-
-    def add_tool_result(self, tool_call_id: str, name: str, output: str) -> Message:
-        m = Message(role="tool", tool_call_id=tool_call_id, name=name, content=output)
-        self.messages.append(m)
-        return m
-
-    def reset(self) -> None:
-        self.messages.clear()
-        self.iteration = 0
 
 
 def to_openai_messages(messages: list[Message], system_prompt: str | None = None) -> list[dict[str, Any]]:

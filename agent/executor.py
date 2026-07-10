@@ -9,7 +9,6 @@ registry 自身已有异常兜底(返回 is_error 的 ToolResult),这里再做�
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from llm.base import ToolCall
@@ -37,25 +36,4 @@ async def execute_call(call: ToolCall, registry: ToolRegistry) -> Message:
     )
 
 
-async def execute_calls(
-    calls: list[ToolCall],
-    registry: ToolRegistry,
-    max_concurrency: int = 8,
-) -> list[Message]:
-    """并发执行多个工具调用,结果按调用顺序返回。
-
-    用 ``asyncio.Semaphore`` 限流,避免一轮里几十个 shell 同时开。
-    """
-    if not calls:
-        return []
-
-    sem = asyncio.Semaphore(max(1, max_concurrency))
-
-    async def _bounded(c: ToolCall) -> Message:
-        async with sem:
-            return await execute_call(c, registry)
-
-    return await asyncio.gather(*[_bounded(c) for c in calls])
-
-
-__all__ = ["execute_call", "execute_calls"]
+__all__ = ["execute_call"]
