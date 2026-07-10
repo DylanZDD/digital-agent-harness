@@ -5,7 +5,7 @@
 
 llm:
   provider: zhipu          # openai | ollama | vllm
-  model: glm-5.2
+  model: glm-4.7-flash
   base_url: https://open.bigmodel.cn/api/coding/paas/v4   # 留空则用各 provider 默认
   api_key: "507fae3374e6438c952c6dae3e26ebc6.zeu9soAQaiNW2DDO"                          # 留空则读 OPENAI_API_KEY 环境变量
   temperature: 0.2

@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -62,26 +63,40 @@ def _build_client(server_name: str, spec: dict[str, Any]) -> MCPClient:
 async def load_mcp_servers(
     servers: dict[str, dict[str, Any]],
     registry: ToolRegistry,
+    *,
+    connect_timeout: float = 10.0,
 ) -> list[MCPClient]:
-    """连接所有 MCP server 并注册其工具。单个 server 失败不影响其他。"""
-    clients: list[MCPClient] = []
-    if not servers:
-        return clients
+    """并发连接所有 MCP server 并注册其工具。单个 server 失败(含超时)不影响其他。
 
-    for server_name, spec in servers.items():
+    各 server 之间无依赖,故用 ``asyncio.gather`` 同时建连,避免一个等一个把
+    启动时间叠成 ``N × 单次耗时``。
+
+    Args:
+        servers:          ``{server_name: spec}`` 映射。
+        registry:         工具注册表。``register`` 是同步方法、内部无 await,故
+                          在多个并发任务里注册不会相互交错,是安全的。
+        connect_timeout:  单个 server 的 connect / list_tools 各自的超时(秒)。
+                          任一 server 卡住时不会拖垮整体启动。
+    """
+    if not servers:
+        return []
+
+    async def _setup_one(server_name: str, spec: dict[str, Any]) -> MCPClient | None:
         try:
             client = _build_client(server_name, spec)
-            await client.connect()
+            await asyncio.wait_for(client.connect(), timeout=connect_timeout)
         except Exception as e:  # noqa: BLE001
             logger.error("MCP server '%s' 连接失败:%s: %s", server_name, type(e).__name__, e)
-            continue
+            return None
 
         try:
-            remote_tools = await client.list_tools()
+            remote_tools = await asyncio.wait_for(
+                client.list_tools(), timeout=connect_timeout
+            )
         except Exception as e:  # noqa: BLE001
             logger.error("MCP server '%s' 拉取工具失败:%s", server_name, e)
             await client.close()
-            continue
+            return None
 
         registered = 0
         for t in remote_tools:
@@ -91,12 +106,13 @@ async def load_mcp_servers(
                 tool.name = f"{server_name}__{tool.name}"
             registry.register(tool)
             registered += 1
-        logger.info(
-            "MCP server '%s' 注册了 %d 个工具", server_name, registered
-        )
-        clients.append(client)
+        logger.info("MCP server '%s' 注册了 %d 个工具", server_name, registered)
+        return client
 
-    return clients
+    results = await asyncio.gather(
+        *(_setup_one(name, spec) for name, spec in servers.items())
+    )
+    return [c for c in results if c is not None]
 
 
 async def close_clients(clients: list[MCPClient]) -> None:

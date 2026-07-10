@@ -67,14 +67,17 @@ async def agent_turn(
 
         # 记录 assistant 回复(含本轮工具调用),OpenAI 要求它在 tool 消息之前
         state.add_assistant(response.content, response.tool_calls)
-        emit("assistant", {"content": response.content, "iteration": i})
 
         tool_calls = extract_tool_calls(response)
 
         if not tool_calls:
-            # 模型给出最终答复
+            # 模型给出最终答复:最终文本由调用方(Session.run)负责打印,这里不再上报,
+            # 否则同一段文字会被 _print_assistant 和 _print_final 各打印一次。
             final_text = response.content or ""
             break
+
+        # 本轮还要调用工具:把附带的 assistant 文本(若有)作为进度上报
+        emit("assistant", {"content": response.content, "iteration": i})
 
         # 依次执行工具调用,边执行边回填、边上报(便于 UI 顺序展示)
         for call in tool_calls:

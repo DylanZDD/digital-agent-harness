@@ -20,7 +20,7 @@ from tools.local.skillsloader import skills_catalog
 from tools.registry import ToolRegistry
 
 DEFAULT_SYSTEM_PROMPT = """\
-你是一名资深、严谨的通用编程助手(类似一个本地 agent)。
+你是一名通用个人工作助手助手。
 
 工作方式:
 1. 先理解用户意图;信息不足时,用一两个问题澄清,而不是瞎猜。
