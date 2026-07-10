@@ -8,10 +8,17 @@
 
     mcp:
       servers:
+        # stdio 传输
         filesystem:
+          type: stdio           # 可选,默认 stdio
           command: npx
           args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
           env: {}
+        # streamable_http 传输
+        my-http-server:
+          type: streamable_http
+          url: https://example.com/mcp
+          headers: {}
 
 同名工具会被自动加上 ``server__`` 前缀,避免冲突。
 """
@@ -28,14 +35,28 @@ logger = logging.getLogger(__name__)
 
 
 def _build_client(server_name: str, spec: dict[str, Any]) -> MCPClient:
-    if "command" not in spec:
-        raise ValueError(f"MCP server '{server_name}' 缺少必填字段 'command'")
-    return MCPClient(
-        name=server_name,
-        command=spec["command"],
-        args=spec.get("args") or [],
-        env=spec.get("env") or None,
-    )
+    transport = spec.get("type", "stdio")
+
+    if transport == "streamable_http":
+        if "url" not in spec:
+            raise ValueError(f"MCP server '{server_name}' 使用 streamable_http 但缺少 'url'")
+        return MCPClient(
+            name=server_name,
+            transport="streamable_http",
+            url=spec["url"],
+            headers=spec.get("headers") or None,
+        )
+    else:
+        # stdio 传输
+        if "command" not in spec:
+            raise ValueError(f"MCP server '{server_name}' 缺少必填字段 'command'")
+        return MCPClient(
+            name=server_name,
+            transport="stdio",
+            command=spec["command"],
+            args=spec.get("args") or [],
+            env=spec.get("env") or None,
+        )
 
 
 async def load_mcp_servers(

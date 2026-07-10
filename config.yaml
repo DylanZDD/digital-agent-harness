@@ -26,11 +26,10 @@ skills:
   dir: skills               # skills 目录,存放 SKILL.md
 
 mcp:
-  servers: {}               # MCP 服务器定义,见下方示例
-  # servers:
-  #   filesystem:
-  #     command: npx
-  #     args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-  #   sqlite:
-  #     command: uvx
-  #     args: ["mcp-server-sqlite", "--db-path", "/tmp/demo.db"]
+  servers:
+    12306-mcp:
+      type: streamable_http
+      url: https://mcp.api-inference.modelscope.net/ce97681a20494c/mcp
+    time:
+      type: streamable_http
+      url: https://mcp.api-inference.modelscope.net/71d3418d697344/mcp
