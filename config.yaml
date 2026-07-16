@@ -9,10 +9,10 @@ llm:
   base_url: https://open.bigmodel.cn/api/coding/paas/v4   # 留空则用各 provider 默认
   api_key: "507fae3374e6438c952c6dae3e26ebc6.zeu9soAQaiNW2DDO"                          # 留空则读 OPENAI_API_KEY 环境变量
   temperature: 0.2
-  max_tokens: 2048
+  max_tokens: 4096
 
 agent:
-  max_iterations: 25        # 单轮对话最大工具调用迭代数,防止死循环
+  max_iterations: 100        # 单轮对话最大工具调用迭代数,防止死循环
   system_prompt: null       # 覆盖默认人设提示词,null 用内置编程助手人设
 
 tools:
