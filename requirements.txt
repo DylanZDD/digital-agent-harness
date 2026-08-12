@@ -12,3 +12,6 @@ python-dotenv>=1.0.0
 
 # 终端美化输出
 rich>=13.0.0
+
+# 终端输入框:接管 raw mode,正确处理 CJK 宽字符、历史记录、自动补全
+prompt_toolkit>=3.0.0

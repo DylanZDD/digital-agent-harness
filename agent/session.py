@@ -8,6 +8,8 @@
 
 同时实现 ``agent_turn`` 的事件回调,用 rich 把工具调用 / 结果 / 最终答复
 漂亮地打印到终端。
+
+输入框使用 prompt_toolkit,正确处理 CJK 宽字符,告别中文删除残留。
 """
 
 from __future__ import annotations
@@ -69,6 +71,29 @@ except Exception:  # pragma: no cover - rich 不可用时降级
         print(msg)
 
 
+# ── 输入框:优先 prompt_toolkit,缺失则降级到 input() ──────────
+# 注意:REPL 跑在 asyncio 事件循环里,必须用 prompt_async;
+# 同步的 prompt() 内部会调 asyncio.run(),嵌套事件循环会抛 RuntimeError。
+try:
+    from prompt_toolkit.history import InMemoryHistory
+    from prompt_toolkit.shortcuts import PromptSession
+
+    async def _read_input(prompt_str: str, history: InMemoryHistory) -> str:
+        """prompt_toolkit 接管终端输入,正确处理 CJK 宽字符。"""
+        return await PromptSession(history=history).prompt_async(
+            prompt_str,
+            multiline=False,
+            enable_history_search=True,
+        )
+
+except Exception:  # pragma: no cover
+    import asyncio
+
+    async def _read_input(prompt_str: str, history: Any) -> str:
+        # input() 是阻塞的,丢到线程里避免卡住事件循环。
+        return await asyncio.to_thread(input, prompt_str)
+
+
 class Session:
     def __init__(
         self,
@@ -82,6 +107,7 @@ class Session:
         self.registry = registry
         self.system_prompt = system_prompt
         self.state = AgentState()
+        self._history = InMemoryHistory()  # 历史记录,↑/↓ 翻阅
 
     # ── 事件回调 ───────────────────────────────────────────────
     def _on_event(self, kind: str, data: dict[str, Any]) -> None:
@@ -119,7 +145,7 @@ class Session:
         _print_system("进入交互模式。输入 /help 查看命令,/exit 退出。\n")
         while True:
             try:
-                line = input("你 > ").strip()
+                line = (await _read_input("你 > ", self._history)).strip()
             except (EOFError, KeyboardInterrupt):
                 _print_system("\n再见。")
                 break
