@@ -35,7 +35,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("-c", "--config", default="config.yaml", help="配置文件路径(默认 config.yaml)")
     p.add_argument("-p", "--prompt", default=None, help="单次执行模式:直接给一条 prompt;不给则进入交互 REPL")
-    p.add_argument("--provider", default=None, choices=["openai", "ollama", "vllm"], help="覆盖 LLM provider")
+    p.add_argument("--provider", default=None, choices=["openai", "ollama", "vllm", "zhipu"], help="覆盖 LLM provider")
     p.add_argument("--model", default=None, help="覆盖 LLM 模型名")
     p.add_argument("--base-url", default=None, help="覆盖 LLM base_url")
     p.add_argument("--workdir", default=None, help="覆盖工具工作目录(文件系统/shell 的根)")
