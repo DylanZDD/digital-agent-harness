@@ -40,6 +40,8 @@ class LLMConfig:
     api_key: str | None = None          # None = 读环境变量
     temperature: float = 0.2
     max_tokens: int | None = 2048
+    # /model 菜单的快捷模型列表;元素为 "名称" 或 {model, base_url?}
+    quick_models: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -103,10 +105,19 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
 
     cfg = Config()
     cfg.llm = _dict_to_dataclass(LLMConfig, raw.get("llm"))
+    # quick_models 归一化:纯字符串条目 → {"model": 条目}
+    cfg.llm.quick_models = [
+        {"model": m} if isinstance(m, str) else m for m in cfg.llm.quick_models
+    ]
     cfg.tools = _dict_to_dataclass(ToolsConfig, raw.get("tools"))
     cfg.skills = _dict_to_dataclass(SkillsConfig, raw.get("skills"))
     cfg.agent = _dict_to_dataclass(AgentConfig, raw.get("agent"))
-    cfg.mcp = raw.get("mcp", {}).get("servers", {}) or {}
+    # MCP 服务器:enabled: false 的不加载;enabled 键本身不透传给 client
+    cfg.mcp = {
+        name: {k: v for k, v in spec.items() if k != "enabled"}
+        for name, spec in (raw.get("mcp", {}).get("servers", {}) or {}).items()
+        if spec.get("enabled", True)
+    }
 
     # 环境变量覆盖(仅 LLM 相关)
     # api_key:支持多家 provider 的常见变量名,取第一个非空

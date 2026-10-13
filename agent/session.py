@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from llm import build_llm
 from llm.base import BaseLLM
 from tools.registry import ToolRegistry
 
@@ -153,7 +154,7 @@ class Session:
                 continue
 
             if line.startswith("/"):
-                if self._handle_command(line):
+                if await self._handle_command(line):
                     break
                 continue
 
@@ -164,7 +165,7 @@ class Session:
                 _print_system(f"⚠ 本轮出错:{type(e).__name__}: {e}")
             _print_system("")  # 空行分隔
 
-    def _handle_command(self, line: str) -> bool:
+    async def _handle_command(self, line: str) -> bool:
         """处理 / 命令。返回 True 表示请求退出 REPL。"""
         cmd = line.lower()
         if cmd in ("/exit", "/quit"):
@@ -173,11 +174,65 @@ class Session:
         if cmd == "/reset":
             self.reset()
             _print_system("已清空对话历史。")
+        elif cmd == "/model" or line.split()[0].lower() == "/model":
+            await self._handle_model(line.split()[1:])
         elif cmd == "/help":
-            _print_system("命令:/help  帮助   /reset  清空历史   /exit  退出")
+            _print_system(
+                "命令:/help  帮助   /reset  清空历史   /exit  退出\n"
+                "     /model            选择/切换模型(菜单,或 /model <名称> [base_url])"
+            )
         else:
             _print_system(f"未知命令:{line}(试试 /help)")
         return False
+
+    async def _handle_model(self, args: list[str]) -> None:
+        """`/model` 子命令:菜单选择或手动切换模型。历史与工具不受影响。"""
+        if args:  # 手动:/model <名称> [base_url]
+            await self._swap_model(args[0], args[1] if len(args) > 1 else None)
+            return
+        base = getattr(self.llm, "client", None) and self.llm.client.base_url
+        _print_system(
+            f"当前模型:{getattr(self.llm, 'provider', '?')} / {self.llm.model}"
+            f"(base_url={base or '默认'})"
+        )
+        models = self.config.llm.quick_models
+        if not models:
+            _print_system(
+                "未配置快捷模型列表(config.yaml 的 llm.quick_models),"
+                "用法:/model <名称> [base_url]"
+            )
+            return
+        for i, m in enumerate(models, 1):
+            tag = f"(端点 {m['base_url']})" if m.get("base_url") else ""
+            _print_system(f"  {i}. {m['model']} {tag}")
+        choice = (await _read_input("选择编号(0=手动输入,回车取消)> ", self._history)).strip()
+        if not choice:
+            return
+        if choice == "0":
+            name = (await _read_input("模型名称 > ", self._history)).strip()
+            if name:
+                await self._swap_model(name, None)
+        elif choice.isdigit() and 1 <= int(choice) <= len(models):
+            m = models[int(choice) - 1]
+            await self._swap_model(m["model"], m.get("base_url"))
+        else:
+            _print_system(f"无效选择:{choice},已取消。")
+
+    async def _swap_model(self, model: str, base_url: str | None) -> None:
+        """重建 LLM 实例并替换;失败保留原模型。"""
+        prev = (self.config.llm.model, self.config.llm.base_url)
+        self.config.llm.model = model
+        if base_url:
+            self.config.llm.base_url = base_url
+        try:
+            new_llm = build_llm(self.config.llm)
+        except Exception as e:  # noqa: BLE001 - 切换失败保留原模型
+            self.config.llm.model, self.config.llm.base_url = prev
+            _print_system(f"⚠ 切换失败,继续用 {self.llm.model}:{type(e).__name__}: {e}")
+            return
+        await self.llm.close()
+        self.llm = new_llm
+        _print_system(f"已切换:{new_llm.model}(base_url={base_url or '沿用原端点'})")
 
     def reset(self) -> None:
         self.state = AgentState()

@@ -58,11 +58,22 @@ python app.py -p "列出当前目录并解释每个文件的作用"
 # 切换到本地 Ollama
 python app.py --provider ollama --model llama3.1
 
+# 本次启动不连任何 MCP 服务器
+python app.py --no-mcp
+
 # 详细日志
 python app.py -vv
 ```
 
-REPL 内置命令:`/help` `/reset` `/exit`。
+REPL 内置命令:`/help` `/reset` `/exit` `/model`。
+
+**运行时切换模型**(无需重启,对话历史保留):
+
+```
+/model                                    # 查看当前模型
+/model glm-5.3-flash                      # 同端点换模型
+/model glm-5.3-flash https://open.bigmodel.cn/api/paas/v4   # 换模型 + 换端点
+```
 
 ## 配置
 
@@ -74,7 +85,7 @@ REPL 内置命令:`/help` `/reset` `/exit`。
 | `tools.workdir` | 文件系统/Shell 的沙箱根,路径穿越会被拦截 |
 | `tools.shell_allowlist` | 空=允许任意命令;非空=只放行白名单前缀 |
 | `agent.max_iterations` | 单轮最大工具调用轮数,防死循环 |
-| `mcp.servers` | MCP 服务器定义(见下) |
+| `mcp.servers` | MCP 服务器定义(见下);单个服务器可加 `enabled: false` 关闭 |
 
 ### 接入 MCP 服务器
 
@@ -130,10 +141,3 @@ description: 一句话说明这个技能做什么
 - **工具零散落**:所有工具(本地 / MCP / skill)实现同一个 `Tool` 抽象,`registry.schemas()` 直接产出 function-calling schema,`registry.execute()` 统一异常兜底——单个工具出错不会打断 agent 循环。
 - **解析双路径**:优先 OpenAI 原生 `tool_calls`;模型不支持时,从正文 `<tool_call>{...}</tool_call>` 或裸 JSON 兜底解析。
 - **消息可重放**:`Message` ⇄ OpenAI dict 双向转换,assistant 轮带 `tool_calls`、tool 轮带 `tool_call_id`,严格符合 API 要求。
-
-## 自检
-
-```bash
-python -m compileall -q .          # 语法
-python app.py -p "..."             # 真实跑(需 API key)
-```
