@@ -69,6 +69,10 @@ try:
         """工具执行期间的 spinner,返回给调用方在结果到达时 stop()。"""
         return _console.status(f"[bold cyan]⏺[/] [bold]{name}[/] [dim]({_fmt_args(args)})[/]")
 
+    def _think_spinner() -> Any:
+        """等待模型输出(首个 token 到达前)的 spinner。"""
+        return _console.status("[dim]思考中…[/]")
+
     def _print_tool_call(name: str, args: dict) -> None:
         _console.print(f"[bold cyan]⏺[/] [bold]{name}[/] [dim]({_fmt_args(args)})[/]")
 
@@ -114,6 +118,9 @@ except Exception:  # pragma: no cover - rich 不可用时降级
         print(content)
 
     def _tool_spinner(name: str, args: dict) -> Any:
+        return None
+
+    def _think_spinner() -> Any:
         return None
 
     def _print_tool_call(name: str, args: dict) -> None:
@@ -174,24 +181,25 @@ class Session:
     # ── 事件回调 ───────────────────────────────────────────────
     def _on_event(self, kind: str, data: dict[str, Any]) -> None:
         if kind == "delta":
+            self._stop_spinner()
             if self._stream is None:
                 _print_system("")  # 与上方输入 / 工具结果空开一行
                 self._stream = _StreamRenderer()
             self._stream.add(data["content"])
         elif kind == "assistant":
             # 非流式兜底:整段进度文本。流式模式下文字已通过 delta 显示过,跳过。
+            self._stop_spinner()
             if self._stream is None and data.get("content"):
                 _print_assistant(data["content"])
         elif kind == "tool_call":
+            self._stop_spinner()
             self._close_stream()
             self._pending_call = (data["name"], data["arguments"])
             self._spinner = _tool_spinner(*self._pending_call)
             if self._spinner is not None:
                 self._spinner.start()
         elif kind == "tool_result":
-            if self._spinner is not None:
-                self._spinner.stop()
-                self._spinner = None
+            self._stop_spinner()
             if self._pending_call is not None:
                 _print_tool_call(*self._pending_call)
                 self._pending_call = None
@@ -199,9 +207,19 @@ class Session:
             # registry 兜底返回的错误文本以「错误:」开头,据此判断样式
             is_error = str(output).lstrip().startswith(("错误:", "执行工具"))
             _print_tool_result(data["name"], output, is_error=is_error)
+            # 结果已回填,下一轮又在等模型 → 继续「思考中」
+            self._spinner = _think_spinner()
+            if self._spinner is not None:
+                self._spinner.start()
         elif kind == "limit":
+            self._stop_spinner()
             self._close_stream()
             _print_system(f"⚠ 达到最大迭代数 {data['max_iterations']},已停止。")
+
+    def _stop_spinner(self) -> None:
+        if self._spinner is not None:
+            self._spinner.stop()
+            self._spinner = None
 
     def _close_stream(self) -> None:
         if self._stream is not None:
@@ -213,6 +231,10 @@ class Session:
         """运行一轮。返回最终文本。"""
         self.state.add_user(user_input)
         self._stream = None
+        # 等待首个 token 期间转「思考中」,首个 delta 到达时由事件回调停掉
+        self._spinner = _think_spinner()
+        if self._spinner is not None:
+            self._spinner.start()
         try:
             final = await agent_turn(
                 state=self.state,
@@ -225,6 +247,7 @@ class Session:
         finally:
             streamed = self._stream is not None
             self._close_stream()
+            self._stop_spinner()
         # 流式模式下文字已通过 delta 逐段显示过,不再整体重渲染
         if show_final and final and not streamed:
             _print_final(final)
