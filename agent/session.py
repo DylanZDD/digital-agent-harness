@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -88,7 +89,6 @@ try:
         )
 
 except Exception:  # pragma: no cover
-    import asyncio
 
     async def _read_input(prompt_str: str, history: Any) -> str:
         # input() 是阻塞的,丢到线程里避免卡住事件循环。
@@ -160,6 +160,11 @@ class Session:
 
             try:
                 await self.run(line)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                # Ctrl+C 只中断当前轮。asyncio.run 会把 SIGINT 转成对主任务的
+                # 取消,协程内表现为 CancelledError;竞态下则直接是
+                # KeyboardInterrupt。二者都吞掉,回到输入框,不退出 REPL。
+                _print_system("⚠ 已中断本轮。")
             except Exception as e:  # noqa: BLE001 - 单轮失败不杀 REPL
                 logger.exception("本轮出错")
                 _print_system(f"⚠ 本轮出错:{type(e).__name__}: {e}")

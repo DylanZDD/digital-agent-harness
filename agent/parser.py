@@ -21,7 +21,7 @@ from llm.base import LLMResponse, ToolCall
 
 # <tool_call>{...}</tool_call>  或  <tool_call name="x">{...}</tool_call>
 _TAG_RE = re.compile(r"<tool_call(?:\s+name=[\"'](?P<name>[^\"']+)[\"'])?>(?P<body>.*?)</tool_call>", re.DOTALL)
-# 兜底:正文里疑似工具调用的 JSON 对象(含 "name" 字段)
+# 兜底:正文里疑似工具调用的 JSON 对象(需同时含 "name" 与 "arguments"/"args")
 _JSON_OBJ_RE = re.compile(r"\{(?:[^{}]|(?:\{[^{}]*\}))*\}", re.DOTALL)
 
 
@@ -56,9 +56,13 @@ def _parse_text_tool_calls(text: str) -> list[ToolCall]:
         return calls
 
     # 2) 含 "name" 的裸 JSON 对象
+    #    要求 arguments/args 键同时在场才认定是调用意图:只看 "name" 会把
+    #    正文里举例的 {"name": "张三", ...} 误判成工具调用。
     for m in _JSON_OBJ_RE.finditer(text):
         obj = _safe_load(m.group(0))
         if not obj or "name" not in obj:
+            continue
+        if "arguments" not in obj and "args" not in obj:
             continue
         name = obj["name"]
         args = obj.get("arguments") if isinstance(obj.get("arguments"), dict) else obj.get("args", {})

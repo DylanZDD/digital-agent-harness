@@ -1,10 +1,10 @@
 # ─────────────────────────────────────────────────────────────
 # Agent Harness 配置
-# 优先级: CLI 参数 > 环境变量 > 本文件 > 代码默认值
+# 优先级: CLI 参数 > 本文件 > 环境变量 > 代码默认值
 # ─────────────────────────────────────────────────────────────
 
 llm:
-  provider: zhipu          # openai | ollama | vllm
+  provider: zhipu          # openai | ollama | vllm | zhipu
   model: glm-5.3
   base_url: https://open.bigmodel.cn/api/coding/paas/v4   # 留空则用各 provider 默认
   api_key: null                       # 留空则读 ZHIPU_API_KEY / GLM_API_KEY 环境变量

@@ -137,7 +137,7 @@ digital-agent-harness/
 
 ## ⚙️ 配置
 
-优先级:**CLI 参数 > 环境变量 > `config.yaml` > 代码默认值**。完整示例见 [`config.yaml`](./config.yaml)。
+优先级:**CLI 参数 > `config.yaml` > 环境变量 > 代码默认值**(环境变量仅作缺省:LLM 的 api_key / base_url / model 在 yaml 未设置时才读)。完整示例见 [`config.yaml`](./config.yaml)。
 
 ### LLM
 

@@ -2,7 +2,10 @@
 
 集中管理整个 harness 的运行配置。加载优先级:
 
-    CLI 参数  >  环境变量  >  config.yaml  >  代码默认值
+    CLI 参数  >  config.yaml  >  环境变量  >  代码默认值
+
+(环境变量仅作缺省:LLM 的 api_key / base_url / model 在 yaml 未设置时才读,
+见 ``load_config``。)
 
 用法::
 
@@ -34,7 +37,7 @@ except Exception:  # pragma: no cover - dotenv 不存在也不影响
 
 @dataclass
 class LLMConfig:
-    provider: str = "openai"            # openai | ollama | vllm
+    provider: str = "openai"            # openai | ollama | vllm | zhipu
     model: str = "gpt-4o-mini"
     base_url: str | None = None         # None = 用 provider 默认
     api_key: str | None = None          # None = 读环境变量
@@ -93,7 +96,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         path: YAML 配置文件路径;不存在则用全部默认值。
 
     Returns:
-        Config 实例,其中 LLM 的 api_key/base_url/model 会叠加环境变量覆盖。
+        Config 实例;LLM 的 api_key/base_url/model 在 yaml 未设置时从环境变量读取。
     """
     raw: dict[str, Any] = {}
     if path and Path(path).exists():
