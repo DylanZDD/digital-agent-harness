@@ -40,6 +40,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--base-url", default=None, help="覆盖 LLM base_url")
     p.add_argument("--workdir", default=None, help="覆盖工具工作目录(文件系统/shell 的根)")
     p.add_argument("--no-mcp", action="store_true", help="跳过 MCP 服务器连接")
+    p.add_argument("--no-stream", action="store_true", help="关闭流式输出(个别端点流式兼容性差时用)")
     p.add_argument("-v", "--verbose", action="count", default=0, help="-v INFO, -vv DEBUG")
     return p.parse_args(argv)
 
@@ -67,6 +68,8 @@ def _apply_overrides(cfg: Config, args: argparse.Namespace) -> None:
         cfg.llm.base_url = args.base_url
     if args.workdir:
         cfg.tools.workdir = args.workdir
+    if args.no_stream:
+        cfg.llm.stream = False
 
 
 def _build_registry(cfg: Config) -> ToolRegistry:

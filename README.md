@@ -148,6 +148,7 @@ digital-agent-harness/
 | `llm.api_key` | 留空则读环境变量(`ZHIPU_API_KEY` / `OPENAI_API_KEY` 等) |
 | `llm.quick_models` | `/model` 快捷菜单;条目为 `"名称"` 或 `{model, base_url}` |
 | `llm.temperature` / `llm.max_tokens` | 采样参数 |
+| `llm.stream` | 流式输出(默认开);个别端点流式兼容性差时可置 `false` 回退整段返回,或 CLI 加 `--no-stream` |
 
 ### 工具与安全
 

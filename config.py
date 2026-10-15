@@ -43,6 +43,7 @@ class LLMConfig:
     api_key: str | None = None          # None = 读环境变量
     temperature: float = 0.2
     max_tokens: int | None = 2048
+    stream: bool = True                 # 流式输出;个别端点不兼容时置 false 回退整段返回
     # /model 菜单的快捷模型列表;元素为 "名称" 或 {model, base_url?}
     quick_models: list[Any] = field(default_factory=list)
 

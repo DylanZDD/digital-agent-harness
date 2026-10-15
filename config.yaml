@@ -10,6 +10,7 @@ llm:
   api_key: null                       # 留空则读 ZHIPU_API_KEY / GLM_API_KEY 环境变量
   temperature: 0.2
   max_tokens: 8192
+  stream: true                  # 流式输出;端点不兼容时改 false
   quick_models:                        # /model 菜单快捷选择;base_url 缺省用上面 llm.base_url
     - glm-5.3
     - glm-5.2
