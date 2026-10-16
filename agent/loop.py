@@ -24,7 +24,7 @@ from .state import AgentState, to_openai_messages
 logger = logging.getLogger(__name__)
 
 # 事件回调: (event_type: str, data: dict) -> None
-#   event_type ∈ {"assistant", "tool_call", "tool_result", "limit"}
+#   event_type ∈ {"delta", "assistant", "tool_call", "tool_result", "limit"}
 EventHandler = Callable[[str, dict[str, Any]], None]
 
 
@@ -63,7 +63,9 @@ async def agent_turn(
     for i in range(1, max_iterations + 1):
         messages = to_openai_messages(state.messages, system_prompt)
 
-        response = await llm.chat(messages, tools=schemas or None)
+        # 流式:文本 delta 逐段上报;是否真走流式由 llm.chat 结合 llm.stream 决定
+        on_delta = (lambda text: emit("delta", {"content": text, "iteration": i})) if on_event else None
+        response = await llm.chat(messages, tools=schemas or None, on_delta=on_delta)
 
         # 记录 assistant 回复(含本轮工具调用),OpenAI 要求它在 tool 消息之前
         state.add_assistant(response.content, response.tool_calls)
@@ -71,12 +73,14 @@ async def agent_turn(
         tool_calls = extract_tool_calls(response)
 
         if not tool_calls:
-            # 模型给出最终答复:最终文本由调用方(Session.run)负责打印,这里不再上报,
-            # 否则同一段文字会被 _print_assistant 和 _print_final 各打印一次。
+            # 模型给出最终答复:流式模式下文字已通过 delta 逐段显示(Session
+            # 不再整体重渲染);非流式模式由 Session.run 的 _print_final 打印。
             final_text = response.content or ""
             break
 
-        # 本轮还要调用工具:把附带的 assistant 文本(若有)作为进度上报
+        # 本轮还要调用工具:把附带的 assistant 文本(若有)作为进度上报。
+        # 流式模式下这段文字已逐字显示过,Session 会自行跳过;
+        # 此事件主要服务非流式兜底模式。
         emit("assistant", {"content": response.content, "iteration": i})
 
         # 依次执行工具调用,边执行边回填、边上报(便于 UI 顺序展示)

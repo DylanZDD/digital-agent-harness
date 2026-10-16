@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,15 @@ class LLMResponse:
     raw: Any = None                   # 原始响应对象,调试用
 
 
+def _parse_arguments(raw: str | None) -> dict[str, Any]:
+    """把模型给的 arguments JSON 字符串解析成 dict;非法 JSON 保留原文供调试。"""
+    try:
+        args = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, TypeError):
+        return {"_raw_arguments": raw}
+    return args if isinstance(args, dict) else {"_raw_arguments": raw}
+
+
 class BaseLLM:
     """OpenAI 兼容 Chat Completions 客户端的基类。
 
@@ -72,6 +81,7 @@ class BaseLLM:
             ) from _IMPORT_ERROR
         self.cfg = cfg
         self.model: str = cfg.model or self.default_model
+        self.stream: bool = bool(getattr(cfg, "stream", True))
         self.temperature: float = getattr(cfg, "temperature", 0.2)
         self.max_tokens: int | None = getattr(cfg, "max_tokens", None)
 
@@ -84,6 +94,7 @@ class BaseLLM:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        on_delta: Callable[[str], None] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """发起一次 chat completion。
@@ -91,6 +102,9 @@ class BaseLLM:
         Args:
             messages: OpenAI 格式的消息列表。
             tools:    OpenAI function-calling 格式的工具 schema(可为空)。
+            on_delta: 流式回调;给出且 ``llm.stream`` 开启时走流式请求,
+                      文本 delta 每段回调一次。工具调用的增量在内部按
+                      index 拼装,返回的 LLMResponse 与非流式完全一致。
             **kwargs: 透传给底层 API(如 tool_choice)。
         """
         request: dict[str, Any] = {
@@ -106,6 +120,9 @@ class BaseLLM:
 
         logger.debug("LLM 请求:model=%s, messages=%d, tools=%d", self.model, len(messages), len(tools or []))
 
+        if self.stream and on_delta is not None:
+            return await self._chat_stream(request, on_delta)
+
         resp = await self.client.chat.completions.create(**request)
         choice = resp.choices[0]
         msg = choice.message
@@ -113,12 +130,9 @@ class BaseLLM:
         tool_calls: list[ToolCall] = []
         for tc in (msg.tool_calls or []):
             raw_args = tc.function.arguments if tc.function else None
-            try:
-                args = json.loads(raw_args) if raw_args else {}
-            except (json.JSONDecodeError, TypeError):
-                # 模型偶尔返回非法 JSON,保留原始字符串供调试
-                args = {"_raw_arguments": raw_args}
-            tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+            tool_calls.append(
+                ToolCall(id=tc.id, name=tc.function.name, arguments=_parse_arguments(raw_args))
+            )
 
         usage = {}
         if getattr(resp, "usage", None):
@@ -134,6 +148,62 @@ class BaseLLM:
             finish_reason=choice.finish_reason or "stop",
             usage=usage,
             raw=resp,
+        )
+
+    async def _chat_stream(
+        self, request: dict[str, Any], on_delta: Callable[[str], None]
+    ) -> LLMResponse:
+        """流式请求:累积文本与工具调用增量,拼成与非流式一致的 LLMResponse。"""
+        stream_req = {**request, "stream": True, "stream_options": {"include_usage": True}}
+        content_parts: list[str] = []
+        tool_acc: dict[int, dict[str, str]] = {}  # delta.index -> 增量累积
+        finish_reason = "stop"
+        usage: dict[str, int] = {}
+
+        async for chunk in await self.client.chat.completions.create(**stream_req):
+            # usage 只在末块给(该块 choices 为空)
+            if getattr(chunk, "usage", None):
+                usage = {
+                    "prompt_tokens": chunk.usage.prompt_tokens or 0,
+                    "completion_tokens": chunk.usage.completion_tokens or 0,
+                    "total_tokens": chunk.usage.total_tokens or 0,
+                }
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+            delta = choice.delta
+            if delta is None:
+                continue
+            if delta.content:
+                content_parts.append(delta.content)
+                on_delta(delta.content)
+            # 工具调用增量:首块带 id/name,后续 arguments 以字符串分片到达
+            for tc in delta.tool_calls or []:
+                acc = tool_acc.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                if tc.id:
+                    acc["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if fn.name:
+                        acc["name"] += fn.name
+                    if fn.arguments:
+                        acc["args"] += fn.arguments
+
+        tool_calls = [
+            ToolCall(
+                id=acc["id"] or f"stream-{idx}",
+                name=acc["name"],
+                arguments=_parse_arguments(acc["args"]),
+            )
+            for idx, acc in sorted(tool_acc.items())
+        ]
+        return LLMResponse(
+            content="".join(content_parts) or None,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            usage=usage,
         )
 
     async def close(self) -> None:

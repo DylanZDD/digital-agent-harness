@@ -3,17 +3,23 @@
 ``Session`` 把 LLM、工具注册表、系统提示词、状态串起来,对外提供:
 
 * ``run(user_input)`` —— 单轮:塞入用户消息 → 跑 agent_turn → 返回最终文本
-* ``repl()``          —— 交互式 REPL,支持 ``/help`` ``/reset`` ``/exit``
+* ``repl()``          —— 交互式 REPL,支持 ``/help`` ``/reset`` ``/model`` ``/exit``
 * ``reset()``         —— 清空历史,开新对话
 
-同时实现 ``agent_turn`` 的事件回调,用 rich 把工具调用 / 结果 / 最终答复
-漂亮地打印到终端。
+同时实现 ``agent_turn`` 的事件回调,负责终端展示。布局是无框扁平风格
+(参考 Claude Code),靠符号 + 颜色 + 缩进区分三类内容:
+
+* 模型正文 —— 顶格,delta 到达时实时按 Markdown 渲染(rich Live)
+* 工具调用 —— ``⏺`` 青色符号 + 粗体工具名 + dim 参数,执行期间转 spinner
+* 工具返回 —— 缩进 + ``│`` 竖线 gutter(成功绿 / 出错红),超长截断
 
 输入框使用 prompt_toolkit,正确处理 CJK 宽字符,告别中文删除残留。
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from typing import Any
 
@@ -29,44 +35,103 @@ logger = logging.getLogger(__name__)
 # ── 终端 UI:优先 rich,缺失则降级到 print ─────────────────────
 try:
     from rich.console import Console
+    from rich.live import Live
     from rich.markdown import Markdown
-    from rich.panel import Panel
     from rich.text import Text
 
     _console = Console()
 
+    class _StreamRenderer:
+        """一段模型回复的流式渲染:Live 区域里随 delta 实时按 Markdown 成形。"""
+
+        def __init__(self) -> None:
+            self._parts: list[str] = []
+            self._live = Live(
+                console=_console, vertical_overflow="visible", refresh_per_second=8
+            )
+            self._live.start()
+
+        def add(self, text: str) -> None:
+            self._parts.append(text)
+            self._live.update(Markdown("".join(self._parts)))
+
+        def stop(self) -> None:
+            self._live.stop()
+
+    def _fmt_args(args: dict) -> str:
+        s = " ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in args.items())
+        return s if len(s) <= 120 else s[:117] + "…"
+
     def _print_assistant(content: str) -> None:
-        _console.print(Text(content, style="dim"))
+        _console.print(content, style="dim")
+
+    def _tool_spinner(name: str, args: dict) -> Any:
+        """工具执行期间的 spinner,返回给调用方在结果到达时 stop()。"""
+        return _console.status(f"[bold cyan]⏺[/] [bold]{name}[/] [dim]({_fmt_args(args)})[/]")
+
+    def _think_spinner() -> Any:
+        """等待模型输出(首个 token 到达前)的 spinner。"""
+        return _console.status("[dim]思考中…[/]")
 
     def _print_tool_call(name: str, args: dict) -> None:
-        _console.print(f"  [bold cyan]→ 工具[/] [yellow]{name}[/] {args}")
+        _console.print(f"[bold cyan]⏺[/] [bold]{name}[/] [dim]({_fmt_args(args)})[/]")
 
     def _print_tool_result(name: str, output: str, is_error: bool = False) -> None:
-        style = "red" if is_error else "green"
-        preview = output if len(output) <= 1200 else output[:1200] + "\n…(已截断)"
-        _console.print(Panel(preview, title=f"{name}", border_style=style, expand=False))
+        lines = output.splitlines() or ["(无输出)"]
+        shown, hidden = lines[:12], max(len(lines) - 12, 0)
+        bar_style = "red" if is_error else "green"
+        for ln in shown:
+            ln = ln[:200] + "…" if len(ln) > 200 else ln
+            line = Text("  │ ", style=bar_style)
+            line.append(ln, style="dim")
+            _console.print(line)
+        if hidden:
+            tail = Text("  │ ", style=bar_style)
+            tail.append(f"… +{hidden} 行", style="dim")
+            _console.print(tail)
 
     def _print_final(content: str) -> None:
         _console.print()
-        _console.print(Panel(Markdown(content), title="助手", border_style="blue"))
+        _console.print(Markdown(content))
 
     def _print_system(msg: str) -> None:
         _console.print(msg, style="magenta")
 
 except Exception:  # pragma: no cover - rich 不可用时降级
+
+    class _StreamRenderer:
+        def __init__(self) -> None:
+            self._printed = False
+
+        def add(self, text: str) -> None:
+            print(text, end="", flush=True)
+            self._printed = True
+
+        def stop(self) -> None:
+            if self._printed:
+                print()
+
+    def _fmt_args(args: dict) -> str:
+        return str(args)
+
     def _print_assistant(content: str) -> None:
         print(content)
 
+    def _tool_spinner(name: str, args: dict) -> Any:
+        return None
+
+    def _think_spinner() -> Any:
+        return None
+
     def _print_tool_call(name: str, args: dict) -> None:
-        print(f"  → 工具 {name} {args}")
+        print(f"  ⏺ {name} {args}")
 
     def _print_tool_result(name: str, output: str, is_error: bool = False) -> None:
         tag = "[错误]" if is_error else ""
-        print(f"  [{name}{tag}] {output}")
+        print(f"  │ {name}{tag}: {output[:1200]}")
 
     def _print_final(content: str) -> None:
-        print("\n=== 助手 ===")
-        print(content)
+        print("\n" + content)
 
     def _print_system(msg: str) -> None:
         print(msg)
@@ -88,7 +153,6 @@ try:
         )
 
 except Exception:  # pragma: no cover
-    import asyncio
 
     async def _read_input(prompt_str: str, history: Any) -> str:
         # input() 是阻塞的,丢到线程里避免卡住事件循环。
@@ -109,35 +173,83 @@ class Session:
         self.system_prompt = system_prompt
         self.state = AgentState()
         self._history = InMemoryHistory()  # 历史记录,↑/↓ 翻阅
+        # 展示层运行时状态
+        self._stream: Any = None            # 进行中的流式渲染区(_StreamRenderer)
+        self._spinner: Any = None           # 进行中的工具 spinner
+        self._pending_call: tuple[str, dict] | None = None  # spinner 对应的工具调用
 
     # ── 事件回调 ───────────────────────────────────────────────
     def _on_event(self, kind: str, data: dict[str, Any]) -> None:
-        if kind == "assistant":
-            if data.get("content"):
+        if kind == "delta":
+            self._stop_spinner()
+            if self._stream is None:
+                _print_system("")  # 与上方输入 / 工具结果空开一行
+                self._stream = _StreamRenderer()
+            self._stream.add(data["content"])
+        elif kind == "assistant":
+            # 非流式兜底:整段进度文本。流式模式下文字已通过 delta 显示过,跳过。
+            self._stop_spinner()
+            if self._stream is None and data.get("content"):
                 _print_assistant(data["content"])
         elif kind == "tool_call":
-            _print_tool_call(data["name"], data["arguments"])
+            self._stop_spinner()
+            self._close_stream()
+            self._pending_call = (data["name"], data["arguments"])
+            self._spinner = _tool_spinner(*self._pending_call)
+            if self._spinner is not None:
+                self._spinner.start()
         elif kind == "tool_result":
+            self._stop_spinner()
+            if self._pending_call is not None:
+                _print_tool_call(*self._pending_call)
+                self._pending_call = None
             output = data.get("output", "")
             # registry 兜底返回的错误文本以「错误:」开头,据此判断样式
             is_error = str(output).lstrip().startswith(("错误:", "执行工具"))
             _print_tool_result(data["name"], output, is_error=is_error)
+            # 结果已回填,下一轮又在等模型 → 继续「思考中」
+            self._spinner = _think_spinner()
+            if self._spinner is not None:
+                self._spinner.start()
         elif kind == "limit":
+            self._stop_spinner()
+            self._close_stream()
             _print_system(f"⚠ 达到最大迭代数 {data['max_iterations']},已停止。")
+
+    def _stop_spinner(self) -> None:
+        if self._spinner is not None:
+            self._spinner.stop()
+            self._spinner = None
+
+    def _close_stream(self) -> None:
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream = None
 
     # ── 单轮 ───────────────────────────────────────────────────
     async def run(self, user_input: str, show_final: bool = True) -> str:
         """运行一轮。返回最终文本。"""
         self.state.add_user(user_input)
-        final = await agent_turn(
-            state=self.state,
-            llm=self.llm,
-            registry=self.registry,
-            system_prompt=self.system_prompt,
-            max_iterations=self.config.agent.max_iterations,
-            on_event=self._on_event,
-        )
-        if show_final and final:
+        self._stream = None
+        # 等待首个 token 期间转「思考中」,首个 delta 到达时由事件回调停掉
+        self._spinner = _think_spinner()
+        if self._spinner is not None:
+            self._spinner.start()
+        try:
+            final = await agent_turn(
+                state=self.state,
+                llm=self.llm,
+                registry=self.registry,
+                system_prompt=self.system_prompt,
+                max_iterations=self.config.agent.max_iterations,
+                on_event=self._on_event,
+            )
+        finally:
+            streamed = self._stream is not None
+            self._close_stream()
+            self._stop_spinner()
+        # 流式模式下文字已通过 delta 逐段显示过,不再整体重渲染
+        if show_final and final and not streamed:
             _print_final(final)
         return final
 
@@ -160,6 +272,11 @@ class Session:
 
             try:
                 await self.run(line)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                # Ctrl+C 只中断当前轮。asyncio.run 会把 SIGINT 转成对主任务的
+                # 取消,协程内表现为 CancelledError;竞态下则直接是
+                # KeyboardInterrupt。二者都吞掉,回到输入框,不退出 REPL。
+                _print_system("⚠ 已中断本轮。")
             except Exception as e:  # noqa: BLE001 - 单轮失败不杀 REPL
                 logger.exception("本轮出错")
                 _print_system(f"⚠ 本轮出错:{type(e).__name__}: {e}")
