@@ -80,6 +80,12 @@ try:
     def _print_assistant(content: str) -> None:
         _console.print(content, style="dim")
 
+    def _print_user(content: str) -> None:
+        # Text 不解析 markup:用户内容里带 [xxx] 之类的字面量也不会炸
+        line = Text("你 > ", style="bold")
+        line.append(content)
+        _console.print(line)
+
     def _tool_spinner(name: str, args: dict) -> Any:
         """工具执行期间的 spinner,返回给调用方在结果到达时 stop()。"""
         return _console.status(f"[bold cyan]⏺[/] [bold]{name}[/] [dim]({_fmt_args(args)})[/]")
@@ -131,6 +137,9 @@ except Exception:  # pragma: no cover - rich 不可用时降级
 
     def _print_assistant(content: str) -> None:
         print(content)
+
+    def _print_user(content: str) -> None:
+        print(f"你 > {content}")
 
     def _tool_spinner(name: str, args: dict) -> Any:
         return None
@@ -367,12 +376,31 @@ class Session:
             return
         self.state = AgentState(messages=stored.messages)
         self.session_id = stored.id  # 续写的轮次落回同一文件
-        updated = stored.updated_at.replace("T", " ")
+        self._replay_history(stored.updated_at.replace("T", " "))
+
+    def _replay_history(self, updated_at: str) -> None:
+        """恢复会话后把历史对话回放到终端,补上「之前聊了什么」的上下文。
+
+        紧凑版式:用户输入与助手正文完整回显(助手按 Markdown 渲染),
+        工具调用只留一行 ⏺ 摘要 —— 结果全文太长会淹没对话主线,
+        要看全量细节用 /export 导出 Markdown。
+        """
+        msgs = self.state.messages
+        n_user = sum(1 for m in msgs if m.role == "user")
         _print_system(
-            f"已恢复会话 {stored.id}"
-            f"({sum(1 for m in stored.messages if m.role == 'user')} 轮对话,更新于 {updated}),"
-            "继续输入即可接着聊。"
+            f"── 恢复会话 {self.session_id}(更新于 {updated_at},{n_user} 轮)──"
         )
+        for m in msgs:
+            if m.role == "user":
+                _print_user(m.content or "")
+            elif m.role == "assistant":
+                # 与直播时一致:先正文后工具行
+                if m.content:
+                    _print_final(m.content)
+                for tc in m.tool_calls or []:
+                    _print_tool_call(tc.name, tc.arguments)
+            # tool 消息不回显:⏺ 摘要已能看出执行过什么
+        _print_system("── 以上为历史对话,继续输入即可接着聊 ──")
 
     def resume(self, session_id: str | None = None) -> bool:
         """恢复历史会话,返回是否成功。``None`` = 最近一个。
