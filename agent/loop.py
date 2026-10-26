@@ -67,10 +67,12 @@ async def agent_turn(
         on_delta = (lambda text: emit("delta", {"content": text, "iteration": i})) if on_event else None
         response = await llm.chat(messages, tools=schemas or None, on_delta=on_delta)
 
-        # 记录 assistant 回复(含本轮工具调用),OpenAI 要求它在 tool 消息之前
-        state.add_assistant(response.content, response.tool_calls)
-
+        # 先解析工具调用(含 <tool_call> 文本兜底),再用解析结果入史:
+        # 兜底路径下 response.tool_calls 为空,若直接入史,后续 tool 消息
+        # 会成为孤儿(tool_call_id 在 assistant 消息里找不到),严格校验的
+        # 端点下一轮迭代就会 400。OpenAI 要求 assistant 消息在 tool 消息之前。
         tool_calls = extract_tool_calls(response)
+        state.add_assistant(response.content, tool_calls)
 
         if not tool_calls:
             # 模型给出最终答复:流式模式下文字已通过 delta 逐段显示(Session

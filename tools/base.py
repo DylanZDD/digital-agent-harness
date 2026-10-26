@@ -17,6 +17,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+# 未声明 parameters 的工具的缺省 JSON Schema(Tool 不是 dataclass,
+# 不能用 field();dict 作类属性只读共享,实现方不应原地修改它)。
+_EMPTY_OBJECT_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}}
+
 
 @dataclass
 class ToolResult:
@@ -36,7 +40,7 @@ class Tool(ABC):
     name: str = ""
     description: str = ""
     # JSON Schema,描述函数入参;默认无参数。
-    parameters: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
+    parameters: dict[str, Any] = _EMPTY_OBJECT_SCHEMA
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> ToolResult:
@@ -46,7 +50,7 @@ class Tool(ABC):
     # ── 给 OpenAI function-calling 用的 schema ──────────────────
     def to_openai_schema(self) -> dict[str, Any]:
         """转成 OpenAI ``tools`` 字段里的一项。"""
-        params = self.parameters or {"type": "object", "properties": {}}
+        params = self.parameters or _EMPTY_OBJECT_SCHEMA
         return {
             "type": "function",
             "function": {

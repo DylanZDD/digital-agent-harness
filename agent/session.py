@@ -154,6 +154,15 @@ try:
 
 except Exception:  # pragma: no cover
 
+    class InMemoryHistory:
+        """降级版历史:只保留条目列表,不支持 ↑/↓ 搜索。"""
+
+        def __init__(self) -> None:
+            self.strings: list[str] = []
+
+        def append_string(self, s: str) -> None:
+            self.strings.append(s)
+
     async def _read_input(prompt_str: str, history: Any) -> str:
         # input() 是阻塞的,丢到线程里避免卡住事件循环。
         return await asyncio.to_thread(input, prompt_str)
