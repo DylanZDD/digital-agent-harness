@@ -22,6 +22,7 @@ LLM 推理 → 工具调用 → 结果回填 → 再推理的异步循环,
 - 🛠 **内置安全工具** —— 文件读写、目录、Shell:统一沙箱根、路径穿越拦截、命令白名单、执行超时
 - 📡 **MCP 协议** —— 接入任意 [Model Context Protocol](https://modelcontextprotocol.io/) 服务器,工具自动发现注册,单个服务器可用 `enabled: false` 关闭
 - 📚 **Skills 知识包** —— `SKILL.md` 知识包,摘要进系统提示词、按需取回正文,控制上下文成本
+- 💾 **会话持久化** —— 每轮自动保存,`/resume` / `--resume` 退出后接着聊,`/export` / `--export` 一键导出 Markdown 分享
 - ⛔ **稳定性设计** —— 单个工具出错不打断 agent 循环;`max_iterations` 防死循环;UI 事件回调异常不影响主流程
 
 ## 🚀 快速开始
@@ -50,6 +51,8 @@ python app.py                                     # 交互式 REPL
 python app.py -p "解释这个项目的架构"              # 单次提问
 python app.py --provider ollama --model llama3.1  # 切换本地 Ollama
 python app.py --no-mcp                            # 本次启动不连 MCP 服务器
+python app.py --resume                            # 恢复最近一次会话继续聊
+python app.py --resume 20261026 --export 会话.md   # 恢复指定会话,结束时导出 Markdown
 python app.py -vv                                 # DEBUG 日志
 ```
 
@@ -58,9 +61,26 @@ python app.py -vv                                 # DEBUG 日志
 | 命令 | 说明 |
 |------|------|
 | `/help` | 帮助 |
-| `/reset` | 清空对话历史 |
+| `/reset` | 清空对话历史(新对话存为新会话文件) |
 | `/model` | 切换模型(菜单,或 `/model <名称> [base_url]`) |
+| `/resume [id]` | 恢复历史会话(菜单,或按 id / 唯一前缀) |
+| `/export [路径]` | 当前对话导出为 Markdown(默认 `./session-<id>.md`) |
 | `/exit` | 退出 |
+
+### 会话持久化
+
+每轮对话结束自动落盘到 `agent.session_dir`(默认 `~/.digital-agent-harness/sessions`),
+退出不丢:
+
+```
+/resume                                   # 列出最近的会话,选编号恢复
+/resume 20261026_153045                   # 按 id(支持唯一前缀)直接恢复
+/export                                   # 导出当前对话为 Markdown(默认当前目录)
+/export ~/Desktop/分享.md                  # 导出到指定路径
+```
+
+恢复时自动清洗中断轮残留(如 Ctrl+C 打断的工具调用组),保证历史对严格校验的端点也合法;
+导出的 Markdown 含模型/时间等元信息,工具结果折叠展示,可直接发给其他人。
 
 ### 运行时切换模型
 
@@ -115,6 +135,7 @@ digital-agent-harness/
 │   ├── loop.py            # 核心 agent 循环(LLM → 解析 → 执行 → 回填)
 │   ├── planner.py         # 系统提示词 / 上下文构建
 │   ├── session.py         # 会话编排 + 交互式 REPL
+│   ├── persistence.py     # 会话持久化(自动保存 / resume / 导出 Markdown)
 │   ├── parser.py          # 工具调用解析(原生 + 文本兜底)
 │   ├── executor.py        # 工具执行(统一异常兜底)
 │   └── state.py           # Message / AgentState / OpenAI 格式转换
@@ -159,6 +180,7 @@ digital-agent-harness/
 | `tools.shell_allowlist` | 空=允许任意命令;非空=只放行白名单前缀(如 `["git", "ls", "python"]`) |
 | `tools.shell_timeout` | 单次 shell 执行超时(秒) |
 | `agent.max_iterations` | 单轮最大工具调用轮数,防死循环 |
+| `agent.session_dir` | 会话持久化目录;留空用 `~/.digital-agent-harness/sessions` |
 
 ### MCP 服务器
 

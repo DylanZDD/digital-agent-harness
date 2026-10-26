@@ -52,6 +52,35 @@ class Message:
             d["content"] = self.content or ""
         return d
 
+    def to_dict(self) -> dict[str, Any]:
+        """序列化成持久化用的 dict(见 persistence.py),与 OpenAI 格式解耦。"""
+        d: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            d["tool_calls"] = [
+                {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                for tc in self.tool_calls
+            ]
+        if self.tool_call_id:
+            d["tool_call_id"] = self.tool_call_id
+        if self.name:
+            d["name"] = self.name
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Message":
+        """从 to_dict 的产物恢复;缺字段一律容错为 None。"""
+        tool_calls = [
+            ToolCall(id=tc.get("id", ""), name=tc.get("name", ""), arguments=tc.get("arguments") or {})
+            for tc in d.get("tool_calls") or []
+        ] or None
+        return cls(
+            role=d.get("role", "user"),
+            content=d.get("content"),
+            tool_calls=tool_calls,
+            tool_call_id=d.get("tool_call_id"),
+            name=d.get("name"),
+        )
+
 
 @dataclass
 class AgentState:
