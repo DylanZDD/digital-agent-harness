@@ -66,6 +66,7 @@ class SkillsConfig:
 class AgentConfig:
     max_iterations: int = 25
     system_prompt: str | None = None    # None = 用 planner 内置人设
+    session_dir: str | None = None      # 会话持久化目录;None = ~/.digital-agent-harness/sessions
 
 
 @dataclass

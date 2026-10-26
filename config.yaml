@@ -22,6 +22,7 @@ llm:
 agent:
   max_iterations: 100        # 单轮对话最大工具调用迭代数,防止死循环
   system_prompt: null       # 覆盖默认人设提示词,null 用内置编程助手人设
+  session_dir: null         # 会话持久化目录(每轮自动保存),null = ~/.digital-agent-harness/sessions
 
 tools:
   workdir: .                # 文件系统工具的根目录(沙箱边界)

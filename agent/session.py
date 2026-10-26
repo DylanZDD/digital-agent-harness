@@ -3,8 +3,13 @@
 ``Session`` 把 LLM、工具注册表、系统提示词、状态串起来,对外提供:
 
 * ``run(user_input)`` —— 单轮:塞入用户消息 → 跑 agent_turn → 返回最终文本
-* ``repl()``          —— 交互式 REPL,支持 ``/help`` ``/reset`` ``/model`` ``/exit``
+* ``repl()``          —— 交互式 REPL,支持 ``/help`` ``/reset`` ``/model``
+                        ``/resume`` ``/export`` ``/exit``
 * ``reset()``         —— 清空历史,开新对话
+
+会话持久化(见 persistence.py):每轮结束自动落盘到
+``agent.session_dir``(默认 ``~/.digital-agent-harness/sessions``),
+``/resume`` 恢复历史会话,``/export`` 导出 Markdown 分享。
 
 同时实现 ``agent_turn`` 的事件回调,负责终端展示。布局是无框扁平风格
 (参考 Claude Code),靠符号 + 颜色 + 缩进区分三类内容:
@@ -21,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from llm import build_llm
@@ -28,6 +34,15 @@ from llm.base import BaseLLM
 from tools.registry import ToolRegistry
 
 from .loop import agent_turn
+from .persistence import (
+    default_session_dir,
+    export_markdown,
+    list_sessions,
+    load_session,
+    new_session_id,
+    resolve_session_id,
+    save_session,
+)
 from .state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -64,6 +79,12 @@ try:
 
     def _print_assistant(content: str) -> None:
         _console.print(content, style="dim")
+
+    def _print_user(content: str) -> None:
+        # Text 不解析 markup:用户内容里带 [xxx] 之类的字面量也不会炸
+        line = Text("你 > ", style="bold")
+        line.append(content)
+        _console.print(line)
 
     def _tool_spinner(name: str, args: dict) -> Any:
         """工具执行期间的 spinner,返回给调用方在结果到达时 stop()。"""
@@ -116,6 +137,9 @@ except Exception:  # pragma: no cover - rich 不可用时降级
 
     def _print_assistant(content: str) -> None:
         print(content)
+
+    def _print_user(content: str) -> None:
+        print(f"你 > {content}")
 
     def _tool_spinner(name: str, args: dict) -> Any:
         return None
@@ -182,6 +206,11 @@ class Session:
         self.system_prompt = system_prompt
         self.state = AgentState()
         self._history = InMemoryHistory()  # 历史记录,↑/↓ 翻阅
+        # 会话持久化:目录来自配置(agent.session_dir),id 在首轮落盘时生成
+        self.session_id: str | None = None
+        self._session_dir = Path(
+            getattr(config.agent, "session_dir", None) or default_session_dir()
+        ).expanduser()
         # 展示层运行时状态
         self._stream: Any = None            # 进行中的流式渲染区(_StreamRenderer)
         self._spinner: Any = None           # 进行中的工具 spinner
@@ -257,6 +286,7 @@ class Session:
             streamed = self._stream is not None
             self._close_stream()
             self._stop_spinner()
+            self._autosave()  # 中断的轮次也落盘,恢复时由 sanitize 清洗
         # 流式模式下文字已通过 delta 逐段显示过,不再整体重渲染
         if show_final and final and not streamed:
             _print_final(final)
@@ -293,23 +323,149 @@ class Session:
 
     async def _handle_command(self, line: str) -> bool:
         """处理 / 命令。返回 True 表示请求退出 REPL。"""
-        cmd = line.lower()
+        head, _, rest = line.partition(" ")
+        cmd = head.lower()
+        rest = rest.strip()
         if cmd in ("/exit", "/quit"):
             _print_system("再见。")
             return True
         if cmd == "/reset":
             self.reset()
-            _print_system("已清空对话历史。")
-        elif cmd == "/model" or line.split()[0].lower() == "/model":
-            await self._handle_model(line.split()[1:])
+            _print_system("已清空对话历史,新对话将存为新会话。")
+        elif cmd == "/model":
+            await self._handle_model(rest.split())
+        elif cmd == "/resume":
+            await self._handle_resume(rest.split())
+        elif cmd == "/export":
+            await self._handle_export(rest)
         elif cmd == "/help":
             _print_system(
                 "命令:/help  帮助   /reset  清空历史   /exit  退出\n"
-                "     /model            选择/切换模型(菜单,或 /model <名称> [base_url])"
+                "     /model            选择/切换模型(菜单,或 /model <名称> [base_url])\n"
+                "     /resume [id]      恢复历史会话(菜单,或 /resume <id 前缀>)\n"
+                "     /export [路径]    当前对话导出为 Markdown(默认 ./session-<id>.md)"
             )
         else:
             _print_system(f"未知命令:{line}(试试 /help)")
         return False
+
+    # ── 会话持久化 ─────────────────────────────────────────────
+    def _autosave(self) -> None:
+        """每轮结束落盘;磁盘异常只记日志,不影响对话。"""
+        if not self.state.messages:
+            return
+        if self.session_id is None:
+            self.session_id = new_session_id()
+        try:
+            save_session(
+                self.state,
+                self.session_id,
+                self._session_dir,
+                model=self.llm.model,
+                provider=getattr(self.llm, "provider", ""),
+            )
+        except OSError as e:
+            logger.warning("会话自动保存失败:%s", e)
+
+    def _load_session(self, session_id: str) -> None:
+        """按完整 id 恢复历史会话(恢复前已由 persistence 清洗中断轮)。"""
+        try:
+            stored = load_session(session_id, self._session_dir)
+        except (FileNotFoundError, ValueError) as e:
+            _print_system(f"⚠ 恢复失败:{e}")
+            return
+        self.state = AgentState(messages=stored.messages)
+        self.session_id = stored.id  # 续写的轮次落回同一文件
+        self._replay_history(stored.updated_at.replace("T", " "))
+
+    def _replay_history(self, updated_at: str) -> None:
+        """恢复会话后把历史对话回放到终端,补上「之前聊了什么」的上下文。
+
+        紧凑版式:用户输入与助手正文完整回显(助手按 Markdown 渲染),
+        工具调用只留一行 ⏺ 摘要 —— 结果全文太长会淹没对话主线,
+        要看全量细节用 /export 导出 Markdown。
+        """
+        msgs = self.state.messages
+        n_user = sum(1 for m in msgs if m.role == "user")
+        _print_system(
+            f"── 恢复会话 {self.session_id}(更新于 {updated_at},{n_user} 轮)──"
+        )
+        for m in msgs:
+            if m.role == "user":
+                _print_user(m.content or "")
+            elif m.role == "assistant":
+                # 与直播时一致:先正文后工具行
+                if m.content:
+                    _print_final(m.content)
+                for tc in m.tool_calls or []:
+                    _print_tool_call(tc.name, tc.arguments)
+            # tool 消息不回显:⏺ 摘要已能看出执行过什么
+        _print_system("── 以上为历史对话,继续输入即可接着聊 ──")
+
+    def resume(self, session_id: str | None = None) -> bool:
+        """恢复历史会话,返回是否成功。``None`` = 最近一个。
+
+        供 CLI ``--resume`` 与 REPL ``/resume <id>`` 共用;失败时提示并
+        保持当前会话不变。
+        """
+        if session_id is None:
+            latest = list_sessions(self._session_dir, limit=1)
+            if not latest:
+                _print_system("没有可恢复的会话。")
+                return False
+            session_id = latest[0].id
+        else:
+            resolved = resolve_session_id(session_id, self._session_dir)
+            if resolved is None:
+                _print_system(f"⚠ 找不到会话(或前缀有歧义):{session_id}")
+                return False
+            session_id = resolved
+        self._load_session(session_id)
+        return True
+
+    async def _handle_resume(self, args: list[str]) -> None:
+        """`/resume` 子命令:菜单选择,或按 id / 唯一前缀直接恢复。"""
+        if args:
+            self.resume(args[0])
+            return
+
+        sessions = list_sessions(self._session_dir)
+        if not sessions:
+            _print_system(f"没有可恢复的会话(目录为空:{self._session_dir})。")
+            return
+        _print_system(f"最近的会话(存于 {self._session_dir}):")
+        for i, s in enumerate(sessions, 1):
+            _print_system(
+                f"  {i}. [{s.id}]  {s.updated_at.replace('T', ' ')}  "
+                f"{s.n_messages} 条消息  {s.preview or '(空)'}"
+            )
+        choice = (await _read_input("选择编号(回车取消)> ", self._history)).strip()
+        if not choice:
+            return
+        if not (choice.isdigit() and 1 <= int(choice) <= len(sessions)):
+            _print_system(f"无效选择:{choice},已取消。")
+            return
+        self._load_session(sessions[int(choice) - 1].id)
+
+    async def _handle_export(self, rest: str) -> None:
+        """`/export` 子命令:当前对话导出为 Markdown,方便发给其他人。"""
+        if not self.state.messages:
+            _print_system("当前没有可导出的对话。")
+            return
+        default_name = f"session-{self.session_id or new_session_id()}.md"
+        path = Path(rest.strip('"') or default_name).expanduser()
+        try:
+            out = export_markdown(
+                self.state,
+                path,
+                session_id=self.session_id or "",
+                model=self.llm.model,
+                provider=getattr(self.llm, "provider", ""),
+            )
+        except OSError as e:
+            _print_system(f"⚠ 导出失败:{e}")
+            return
+        _print_system(f"已导出:{out.resolve()}")
 
     async def _handle_model(self, args: list[str]) -> None:
         """`/model` 子命令:菜单选择或手动切换模型。历史与工具不受影响。"""
@@ -362,6 +518,7 @@ class Session:
 
     def reset(self) -> None:
         self.state = AgentState()
+        self.session_id = None  # 换新 id:旧会话文件保留,可随时 /resume 回来
 
 
 __all__ = ["Session"]

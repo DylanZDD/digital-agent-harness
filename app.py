@@ -5,8 +5,11 @@
 * 单次:``python app.py -p "列出当前目录的文件"``
 * 交互:``python app.py``(进入 REPL)
 
+会话持久化:每轮自动保存;``--resume [ID]`` 启动时恢复历史会话
+(不带 ID 恢复最近一个),``--export <路径>`` 结束时导出 Markdown。
+
 装配顺序:加载配置 → 构建 LLM → 注册本地工具 → 加载 skills → 连接 MCP
-→ 构建系统提示词 → 创建 Session → 运行 → 优雅关闭。
+→ 构建系统提示词 → 创建 Session →(恢复会话)→ 运行 →(导出)→ 优雅关闭。
 """
 
 from __future__ import annotations
@@ -15,8 +18,10 @@ import argparse
 import asyncio
 import logging
 import sys
+from pathlib import Path
 from typing import Any
 
+from agent.persistence import export_markdown
 from agent.planner import build_system_prompt
 from agent.session import Session
 from config import Config, load_config
@@ -41,6 +46,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--workdir", default=None, help="覆盖工具工作目录(文件系统/shell 的根)")
     p.add_argument("--no-mcp", action="store_true", help="跳过 MCP 服务器连接")
     p.add_argument("--no-stream", action="store_true", help="关闭流式输出(个别端点流式兼容性差时用)")
+    p.add_argument(
+        "--resume",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="ID",
+        help="启动时恢复历史会话:不带 ID 恢复最近一个,或给 id(支持前缀)",
+    )
+    p.add_argument(
+        "--export",
+        default=None,
+        metavar="PATH",
+        help="运行结束后把会话导出为 Markdown 到指定路径",
+    )
     p.add_argument("-v", "--verbose", action="count", default=0, help="-v INFO, -vv DEBUG")
     return p.parse_args(argv)
 
@@ -106,6 +125,10 @@ async def _run(cfg: Config, args: argparse.Namespace) -> int:
     system_prompt = build_system_prompt(cfg, registry, skills)
     session = Session(cfg, llm, registry, system_prompt)
 
+    # --resume:空串 = 最近一个;恢复失败保持新会话继续跑
+    if args.resume is not None:
+        session.resume(args.resume or None)
+
     exit_code = 0
     try:
         if args.prompt:
@@ -119,6 +142,19 @@ async def _run(cfg: Config, args: argparse.Namespace) -> int:
         print(f"运行失败:{type(e).__name__}: {e}", file=sys.stderr)
         exit_code = 1
     finally:
+        # --export:结束时导出当前会话(含恢复的历史)
+        if args.export and session.state.messages:
+            try:
+                out = export_markdown(
+                    session.state,
+                    Path(args.export).expanduser(),
+                    session_id=session.session_id or "",
+                    model=llm.model,
+                    provider=getattr(llm, "provider", ""),
+                )
+                print(f"已导出会话:{out.resolve()}")
+            except OSError as e:
+                print(f"导出失败:{e}", file=sys.stderr)
         await close_clients(mcp_clients)
         await llm.close()
     return exit_code
